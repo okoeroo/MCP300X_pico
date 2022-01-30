@@ -111,7 +111,6 @@ if __name__ == '__main__':
 
     print("Hello")
 
-class MCP300X(object):
     adcs = 8
     spi_id = 0
     cs = 5 # GPIO 5, pin 7
@@ -119,9 +118,7 @@ class MCP300X(object):
     mosi = 3
     miso = 4
 
-    mcp0 = MCP300X(adcs, spi_id,
-
-    mcp0 = MCP48XX(TYPE_OF_MCP48xx.MCP4822, spi_id, cs, sck, mosi, miso)
+    mcp0 = MCP300X(adcs, spi_id, cs, sck, mosi, miso)
 
     while True:
         for x in range(0, 8):
