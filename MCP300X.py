@@ -2,129 +2,124 @@ from machine import SPI, Pin
 
 
 class MCP300X(object):
-    def __init__(self, model, spi_id, cs, sck_pin, mosi_pin, miso_pin, max_speed_hz=976000):
-        # Modes Single
-        self.CH0 = 8     # single-ended CH0
-        self.CH1 = 9     # single-ended CH1
-        self.CH2 = 10    # single-ended CH2
-        self.CH3 = 11    # single-ended CH3
-        self.CH4 = 12    # single-ended CH4
-        self.CH5 = 13    # single-ended CH5
-        self.CH6 = 14    # single-ended CH6
-        self.CH7 = 15    # single-ended CH7
+    """
+    MCP3008 Differential channel mapping. The following list of available differential readings
+    takes the form ``(positive_pin, negative_pin) = (channel A) - (channel B)``.
+    - (P0, P1) = CH0 - CH1
+    - (P1, P0) = CH1 - CH0
+    - (P2, P3) = CH2 - CH3
+    - (P3, P2) = CH3 - CH2
+    - (P4, P5) = CH4 - CH5
+    - (P5, P4) = CH5 - CH4
+    - (P6, P7) = CH6 - CH7
+    - (P7, P6) = CH7 - CH6
+    """
 
-        # Modes Diff
-        self.DF0 = 0     # differential CH0 = IN+ CH1 = IN-
-        self.DF1 = 1     # differential CH0 = IN- CH1 = IN+
-        self.DF2 = 2     # differential CH2 = IN+ CH3 = IN-
-        self.DF3 = 3     # differential CH2 = IN- CH3 = IN+
-        self.DF4 = 4     # differential CH4 = IN+ CH5 = IN-
-        self.DF5 = 5     # differential CH4 = IN- CH5 = IN+
-        self.DF6 = 6     # differential CH6 = IN+ CH7 = IN-
-        self.DF7 = 7     # differential CH6 = IN- CH7 = IN+
+    def __init__(self, spi_bus, cs, ref_voltage=3.3, model=8):
+        # init
+        self._model = model
+        self._spi_bus = spi_bus
+        self._ref_voltage = ref_voltage
 
-        # const
-        self.HIGH = 1
-        self.LOW  = 0
+        self._cs = cs
 
-        # Only accept values 4 or 8
-        if model != 4 or model != 8:
-            raise ValueError("Only accepts model MCP3004 or MCP3008 by value 4 or 8")
 
-        self.max_channels = model
+        # Model filter
+        if not (model == 8 or
+                model == 4 or
+                model == 2):
+            raise ValueError("Not a valid type, use \"8\" for MCP3008, \"4\" for MCP3004, or \"2\" for MCP3002 chip types")
 
-        # speed
-        self.max_speed_hz = max_speed_hz
 
-        # pins
-        self.chipselect = cs
-        self.chipselect_pin = Pin(cs, Pin.OUT)
+        # Enable high on chip
+        self._cs.value(1)        
 
-        self.spi_id = spi_id
 
-        self.sck  = Pin(sck_pin)
-        self.mosi = Pin(mosi_pin)
-        self.miso = Pin(miso_pin)
+    def reference_voltage(self):
+        """Returns the MCP3xxx's reference voltage. (read-only)"""
+        return self._ref_voltage
 
-        # First stage
-        self.chipSelectHigh()
-        self.spi =  SPI(self.spi_id,
-                        baudrate=self.max_speed_hz,
-                        firstbit=SPI.MSB,
-                        sck = self.sck,
-                        mosi = self.mosi,
-                        miso = self.miso)
 
-    def chipSelectHigh(self):
-        self.chipselect_state = self.HIGH
-        self.chipselect_pin.on()
+    def verifyModelToChannel(self, channel):
+        if channel >= self._model:
+            raise ValueError("Channel", channel, "is higher than model supports")
 
-    def chipSelectLow(self):
-        self.chipselect_state = self.LOW
-        self.chipselect_pin.off()
 
-    def _SPIread(self, channel, differential):
-        if channel >= self.max:
-            raise ValueError("Unsupported channel number selected")
+    def readRAW(self, channel, is_differential=False):
+        # Model filter
+        self.verifyModelToChannel(channel)
+        
+        # The MCP3xxx ADC has 10-bit resolution, hence 0-1023
+        out_buf = bytearray(3)
+        in_buf = bytearray(3)
 
-        buf = bytearray(3)
+        # Start bit
+        out_buf[0] = 0x01
+        
+        # Select chip
+        self._cs.value(0)
         try:
-            buf[0] = 0x01
-            buf[1] = (differential << 7) | (channel << 4)
-            buf[0] = 0x00
-
-        ### Write buffer to SPI
-        try:
-            self.chipSelectLow()
-            self.spi.write(buf)
-
-            data = spi.read(2)
+            out_buf[1] = ((not is_differential) << 7) | (channel << 4)
+            self._spi_bus.write_readinto(out_buf, in_buf)
+        
         finally:
-            self.chipSelectHigh()
+            # De-select chip        
+            self._cs.value(1)
 
-#        value = (byte1%4 << 8) + byte2
-        return data
-
-
-    # Read ADC channel
-    # per channel
-    def readADC(self, channel):
-        return self._SPIread(channel, False)
+        return in_buf
 
 
-    # Read differential ADC channel.
-    #  0: Return channel 0 minus channel 1
-    #  1: Return channel 1 minus channel 0
-    #  2: Return channel 2 minus channel 3
-    #  3: Return channel 3 minus channel 2
-    #  4: Return channel 4 minus channel 5
-    #  5: Return channel 5 minus channel 4
-    #  6: Return channel 6 minus channel 7
-    #  7: Return channel 7 minus channel 6
-    def readADCdifferential(self, channel):
-        return self._SPIread(channel, True)
+    def read(self, channel, is_differential=False):
+        # Model filter
+        self.verifyModelToChannel(channel)
+        
+        in_buf = self.readRAW(channel, is_differential)
+        return ((in_buf[1] & 0x03) << 8) | in_buf[2]
+
+
+    def readVolt(self, channel):
+        # Model filter
+        self.verifyModelToChannel(channel)
+        
+        value = self.read(channel)
+        return (value * self._ref_voltage) / 1024
 
 
 ### MAIN
 if __name__ == '__main__':
     import utime
+    
+    spi_bus = 0
+    spi =  SPI(spi_bus,
+               baudrate = 1000000,
+               firstbit = SPI.MSB,
+               sck = Pin(2),
+               mosi = Pin(3),
+               miso = Pin(4))
 
-    print("Hello")
+    # Select chip
+    cs = Pin(5, mode=Pin.OUT)   # GPIO 5, pin 7
 
-    adcs = 8
-    spi_id = 0
-    cs = 5 # GPIO 5, pin 7
-    sck = 2
-    mosi = 3
-    miso = 4
+    # create the mcp object
+    mcp = MCP300X(spi, cs, model=8)
 
-    mcp0 = MCP300X(adcs, spi_id, cs, sck, mosi, miso)
+    
+    # demo selection, channel selection
+    ar = [True, True, True, False, False, False, False, False]
 
     while True:
-        for x in range(0, 8):
-        print("Measure ADC:", x)
+        print('--')
+        # Value
+        for i in range(8):
+            if ar[i]:
+                print("ADC Value", i, ":", mcp.read(i), "voltage:", mcp.readVolt(i), "V", "raw:", mcp.readRAW(i))
 
-        value = mcp0.readADC(x)
+        print()
 
-        print(value)
+        # diff
+        for i in range(8):
+            if ar[i]:
+                print("ADC Diff", i, ":", mcp.read(i, is_differential=True), "raw:", mcp.readRAW(i, is_differential=True))
 
+        print()
+        utime.sleep(2)
