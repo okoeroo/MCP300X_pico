@@ -37,6 +37,7 @@ It is also possible to measure the difference between channels.
 
 ### Example:
 ``` python
+from machine import SPI, Pin
 from MCP300X import MCP300X
 
 spi_bus = 0
